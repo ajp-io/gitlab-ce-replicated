@@ -1,0 +1,39 @@
+apiVersion: kots.io/v1beta2
+kind: HelmChart
+metadata:
+  name: ingress-nginx
+spec:
+  chart:
+    name: ingress-nginx
+    chartVersion: "4.13.3"
+  releaseName: ingress-nginx
+  weight: -20
+  exclude: 'repl{{ ne Distribution "embedded-cluster" }}'
+  helmUpgradeFlags:
+    - --wait
+    - --wait-for-jobs
+    - --timeout
+    - 5m
+  values:
+    imagePullSecrets:
+      - name: '{{repl ImagePullSecretName }}'
+    controller:
+      service:
+        type: NodePort
+        nodePorts:
+          http: "80"
+          https: "443"
+  optionalValues:
+    # Air gap - Use local registry
+    - when: 'repl{{ HasLocalRegistry }}'
+      recursiveMerge: true
+      values:
+        controller:
+          image:
+            registry: '{{repl LocalRegistryHost }}'
+            image: '{{repl LocalRegistryNamespace }}/controller'
+          admissionWebhooks:
+            patch:
+              image:
+                registry: '{{repl LocalRegistryHost }}'
+                image: '{{repl LocalRegistryNamespace }}/kube-webhook-certgen'

@@ -1,0 +1,24 @@
+apiVersion: embeddedcluster.replicated.com/v1beta1
+kind: Config
+spec:
+  version: "2.12.0+k8s-1.33"
+  domains:
+    replicatedAppDomain: updates.alexparker.info
+    proxyRegistryDomain: images.alexparker.info
+  # roles:
+  #   controller:
+  #     name: primary
+  #     labels:
+  #       primary: "true"
+  #   custom:
+  #   - name: database
+  #     labels:
+  #      database: "true"
+  # unsupportedOverrides:
+  #   k0s: |
+  #     config:
+  #       spec:
+  #         workerProfiles:
+  #         - name: custom-maxpods
+  #           values:
+  #             maxPods: 150

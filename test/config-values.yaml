@@ -1,0 +1,15 @@
+configValues:
+  gitlab_root_password:
+    value: testpassword123!
+  gitlab_hostname:
+    value: gitlab.test.example.com
+  letsencrypt_environment:
+    value: staging
+  container_registry_enabled:
+    value: "1"
+  gitlab_runner_enabled:
+    value: "0"
+  database_type:
+    value: embedded
+  embedded_postgres_password:
+    value: postgrespw123

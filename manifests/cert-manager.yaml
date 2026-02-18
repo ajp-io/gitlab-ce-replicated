@@ -1,0 +1,47 @@
+apiVersion: kots.io/v1beta2
+kind: HelmChart
+metadata:
+  name: cert-manager
+spec:
+  chart:
+    name: cert-manager
+    chartVersion: "v1.18.2"
+  releaseName: cert-manager
+  weight: -10
+  exclude: 'repl{{ ne Distribution "embedded-cluster" }}'
+  helmUpgradeFlags:
+    - --wait
+    - --wait-for-jobs
+    - --timeout
+    - 5m
+  values:
+    installCRDs: true
+    global:
+      imagePullSecrets:
+        - name: '{{repl ImagePullSecretName }}'
+  optionalValues:
+    # Air gap - Use local registry
+    - when: 'repl{{ HasLocalRegistry }}'
+      recursiveMerge: true
+      values:
+        image:
+          registry: '{{repl LocalRegistryHost }}'
+          repository: '{{repl LocalRegistryNamespace }}/cert-manager-controller'
+        webhook:
+          image:
+            registry: '{{repl LocalRegistryHost }}'
+            repository: '{{repl LocalRegistryNamespace }}/cert-manager-webhook'
+        cainjector:
+          image:
+            registry: '{{repl LocalRegistryHost }}'
+            repository: '{{repl LocalRegistryNamespace }}/cert-manager-cainjector'
+        acmesolver:
+          image:
+            registry: '{{repl LocalRegistryHost }}'
+            repository: '{{repl LocalRegistryNamespace }}/cert-manager-acmesolver'
+        startupapicheck:
+          image:
+            registry: '{{repl LocalRegistryHost }}'
+            repository: '{{repl LocalRegistryNamespace }}/cert-manager-startupapicheck'
+  builder:
+    installCRDs: true # Ensure all images are discovered during air gap build

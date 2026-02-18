@@ -1,0 +1,118 @@
+apiVersion: kots.io/v1beta1
+kind: Config
+metadata:
+  name: gitlab-community-edition-config
+spec:
+  groups:
+  - name: gitlab_settings
+    title: GitLab Settings
+    description: Core settings for GitLab Community Edition
+    items:
+    - name: gitlab_root_password
+      title: GitLab Root Password
+      type: password
+      required: true
+      help_text: Initial password for the root administrator user (username: root)
+
+    - name: gitlab_hostname
+      title: GitLab Hostname
+      type: text
+      help_text: "The domain name that will be used to access your GitLab instance"
+      when: repl{{ eq Distribution "embedded-cluster" }}
+
+    - name: letsencrypt_environment
+      title: Let's Encrypt Environment
+      type: radio
+      items:
+      - name: staging
+        title: Staging (Testing - Untrusted Certificates)
+      - name: production
+        title: Production (Trusted Certificates)
+      default: staging
+      when: repl{{ eq Distribution "embedded-cluster" }}
+      help_text: Use staging for testing to avoid rate limits. Production certificates are trusted by browsers but limited to 5 per week.
+
+  - name: features
+    title: Optional Features
+    description: Enable or disable optional GitLab features
+    items:
+    - name: container_registry_enabled
+      title: Enable Container Registry
+      type: bool
+      default: "1"
+      help_text: Enable the integrated Docker container registry for storing container images
+
+    - name: gitlab_runner_enabled
+      title: Enable GitLab Runner
+      type: bool
+      default: "0"
+      help_text: Enable CI/CD runner for executing pipelines (runs as pods in the cluster)
+
+    - name: gitlab_runner_replicas
+      title: GitLab Runner Replicas
+      type: text
+      default: "1"
+      help_text: Number of runner instances to deploy
+      when: 'repl{{ ConfigOptionEquals "gitlab_runner_enabled" "1" }}'
+
+  - name: database_settings
+    title: Database Settings
+    description: Configure PostgreSQL database connection
+    items:
+    - name: database_type
+      title: Database Type
+      type: select_one
+      items:
+      - name: embedded
+        title: Embedded PostgreSQL
+        description: Use the built-in PostgreSQL database (recommended for most deployments)
+      - name: external
+        title: External PostgreSQL
+        description: Use an existing PostgreSQL database server
+      default: embedded
+      required: true
+
+    - name: embedded_postgres_password
+      title: Embedded PostgreSQL Password
+      type: password
+      default: gitlabpw123
+      required: true
+      help_text: Password for the embedded PostgreSQL database superuser
+      when: 'repl{{ ConfigOptionEquals "database_type" "embedded" }}'
+
+    - name: external_postgres_host
+      title: External PostgreSQL Host
+      type: text
+      required: true
+      help_text: Hostname of your PostgreSQL server (e.g., "postgres.example.com")
+      when: 'repl{{ ConfigOptionEquals "database_type" "external" }}'
+
+    - name: external_postgres_port
+      title: External PostgreSQL Port
+      type: text
+      default: "5432"
+      help_text: Port number for PostgreSQL
+      when: 'repl{{ ConfigOptionEquals "database_type" "external" }}'
+
+    - name: external_postgres_database
+      title: External PostgreSQL Database Name
+      type: text
+      default: gitlabhq_production
+      required: true
+      help_text: The name of the database to use for GitLab
+      when: 'repl{{ ConfigOptionEquals "database_type" "external" }}'
+
+    - name: external_postgres_username
+      title: External PostgreSQL Username
+      type: text
+      default: gitlab
+      required: true
+      help_text: Username to connect to the external PostgreSQL database
+      when: 'repl{{ ConfigOptionEquals "database_type" "external" }}'
+
+    - name: external_postgres_password
+      title: External PostgreSQL Password
+      type: password
+      required: true
+      help_text: Password to connect to the external PostgreSQL database
+      when: 'repl{{ ConfigOptionEquals "database_type" "external" }}'
