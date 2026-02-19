@@ -74,8 +74,8 @@ jobs:
       - name: Create test release
         run: |
           # Create release on Unstable channel for testing
-          # Note: No --lint flag for alpha EC versions
           replicated release create \
+            --lint \
             --yaml-dir ./manifests \
             --promote Unstable \
             --version "${{ steps.version.outputs.test_version }}"

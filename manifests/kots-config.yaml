@@ -12,7 +12,7 @@ spec:
       title: GitLab Root Password
       type: password
       required: true
-      help_text: Initial password for the root administrator user (username: root)
+      help_text: "Initial password for the root administrator user (username: root)"
 
     - name: gitlab_hostname
       title: GitLab Hostname

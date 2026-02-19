@@ -18,8 +18,7 @@ When you ask me to "create a release" or "make a release", I should:
      - `helm package charts/cert-manager -d manifests -u`
 
 3. **Create and promote release**
-   - `replicated release create --yaml-dir ./manifests --promote Dev --version [NEW_VERSION]`
-   - **Note**: Do not use `--lint` flag when using alpha/beta EC versions, as they won't be recognized by the linter and will cause "non-existent-ec-version" errors. Skip linting for alpha releases.
+   - `replicated release create --lint --yaml-dir ./manifests --promote Dev --version [NEW_VERSION]`
 
 4. **Cleanup**
    - `rm -f manifests/*.tgz`
