@@ -2,7 +2,7 @@ configValues:
   gitlab_root_password:
     value: testpassword123!
   gitlab_hostname:
-    value: gitlab.test.example.com
+    value: gitlab.local
   letsencrypt_environment:
     value: staging
   container_registry_enabled:

@@ -88,25 +88,28 @@ verify_gitlab_installation() {
 
 test_gitlab_ui() {
     local url="$1"
-    local max_attempts="${2:-30}"
-    local sleep_interval="${3:-10}"
+    local max_retries="${2:-10}"
+    local retry_interval="${3:-15}"
+    local curl_flags="${4:--k -f -s}"
 
-    echo "Testing GitLab UI accessibility at $url..."
+    echo "Testing GitLab UI accessibility at: $url"
 
-    for attempt in $(seq 1 $max_attempts); do
-        echo "  Attempt $attempt/$max_attempts..."
-        if curl -k -f -s --max-time 10 "$url" > /dev/null 2>&1; then
+    for ((i=1; i<=max_retries; i++)); do
+        echo "Attempt $i/$max_retries: Testing GitLab UI..."
+
+        # shellcheck disable=SC2086
+        if curl $curl_flags "$url" > /dev/null 2>&1; then
             echo "✅ GitLab UI is accessible!"
             return 0
-        fi
-
-        if [[ $attempt -lt $max_attempts ]]; then
-            echo "  Not ready yet, waiting ${sleep_interval}s..."
-            sleep "$sleep_interval"
+        elif [[ $i -eq $max_retries ]]; then
+            echo "❌ GitLab UI not accessible after $max_retries attempts"
+            return 1
+        else
+            echo "GitLab UI not ready yet, waiting ${retry_interval}s..."
+            sleep "$retry_interval"
         fi
     done
 
-    echo "❌ GitLab UI not accessible after $max_attempts attempts"
     return 1
 }
 
@@ -140,11 +143,58 @@ verify_nginx_ingress_installation() {
 
     echo "Verifying NGINX Ingress installation..."
 
-    $kubectl_cmd rollout status deployment/ingress-nginx-controller \
-        --namespace="$namespace" --timeout=5m || {
+    echo "  Waiting for NGINX Ingress Controller to be available..."
+    $kubectl_cmd wait deployment/ingress-nginx-controller \
+        --for=condition=available \
+        -n "$namespace" \
+        --timeout=300s || {
         echo "❌ NGINX Ingress controller failed"
         return 1
     }
 
     echo "✅ NGINX Ingress installation verified!"
+}
+
+#######################################
+# Resource Creation Polling
+#######################################
+
+# Waits for resources to be created before kubectl wait can be used
+# Polls until a check command succeeds (used for Embedded Cluster async deployments)
+# Arguments:
+#   $1: Stage name (for logging)
+#   $2: Timeout in seconds
+#   $3: Check command to evaluate
+# Returns:
+#   0 if resources detected, 1 if timeout
+# Example:
+#   wait_for_resource_creation "NGINX resources" 180 "$KUBECTL get deployment ingress-nginx-controller -n kotsadm >/dev/null 2>&1"
+wait_for_resource_creation() {
+    local stage_name="$1"
+    local timeout="$2"
+    local check_command="$3"
+    local poll_interval=5
+    local elapsed=0
+
+    echo "Stage: ${stage_name}"
+
+    while [[ $elapsed -lt $timeout ]]; do
+        echo "Checking for ${stage_name} (elapsed: ${elapsed}s/${timeout}s)..."
+
+        if eval "$check_command"; then
+            echo "✅ ${stage_name} detected after ${elapsed}s!"
+            return 0
+        fi
+
+        if [[ $elapsed -ge $timeout ]]; then
+            echo "⚠️  ${stage_name} timeout reached (${timeout}s) - proceeding anyway..."
+            return 1
+        fi
+
+        echo "${stage_name} not ready yet, checking again in ${poll_interval}s..."
+        sleep $poll_interval
+        elapsed=$((elapsed + poll_interval))
+    done
+
+    return 1
 }
