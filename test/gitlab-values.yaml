@@ -18,6 +18,11 @@ global:
   # Minimal GitLab configuration for testing
   edition: ce
 
+# Disable bundled charts - we install them separately from upstream
+installCertmanager: false
+nginx-ingress:
+  enabled: false
+
 # Disable unnecessary components for faster testing
 gitlab-runner:
   install: false
