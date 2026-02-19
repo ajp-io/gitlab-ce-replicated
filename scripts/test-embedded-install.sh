@@ -63,7 +63,7 @@ verify_cert_manager_installation "$KUBECTL" "kotsadm"
 
 # GitLab: wait for creation → verify ready
 echo "Stage 3: GitLab"
-wait_for_resource_creation "GitLab resources" 180 "$KUBECTL get deployment webservice-default -n kotsadm >/dev/null 2>&1 && $KUBECTL get statefulset postgresql -n kotsadm >/dev/null 2>&1 && $KUBECTL get statefulset redis-master -n kotsadm >/dev/null 2>&1"
+wait_for_resource_creation "GitLab resources" 180 "$KUBECTL get deployment gitlab-webservice-default -n kotsadm >/dev/null 2>&1 && $KUBECTL get statefulset gitlab-postgresql -n kotsadm >/dev/null 2>&1 && $KUBECTL get statefulset gitlab-redis-master -n kotsadm >/dev/null 2>&1"
 verify_gitlab_installation "$KUBECTL" "kotsadm"
 
 # Check cert-manager resources

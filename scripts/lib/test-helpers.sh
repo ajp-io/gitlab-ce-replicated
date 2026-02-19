@@ -8,6 +8,13 @@ set -euo pipefail
 # Environment Validation
 #######################################
 
+# Validates that required environment variables are set
+# Arguments:
+#   $@: Variable names to validate
+# Returns:
+#   0 if all variables are set, 1 otherwise
+# Example:
+#   validate_env_vars "TEST_VERSION" "REPLICATED_API_TOKEN" || exit 1
 validate_env_vars() {
     local missing=()
     for var in "$@"; do
@@ -27,12 +34,22 @@ validate_env_vars() {
 # Test Output Formatting
 #######################################
 
+# Prints test header with timestamp
+# Arguments:
+#   $1: Test name
+# Example:
+#   test_header "GitLab KOTS Installation Test"
 test_header() {
     local test_name="$1"
     echo "=== $test_name ==="
     echo "Starting at: $(date)"
 }
 
+# Prints test footer with timestamp
+# Arguments:
+#   $1: Test name
+# Example:
+#   test_footer "GitLab KOTS Installation Test"
 test_footer() {
     local test_name="$1"
     echo "=== $test_name PASSED ==="
@@ -40,52 +57,357 @@ test_footer() {
 }
 
 #######################################
-# Installation Verification
+# Installation Verification (High-Level)
 #######################################
 
+# Verifies complete GitLab installation (resources + endpoints + status)
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "default")
+# Returns:
+#   0 on success
+# Example:
+#   verify_gitlab_installation "kubectl" "default"
+#   verify_gitlab_installation "$KUBECTL" "kotsadm"
 verify_gitlab_installation() {
     local kubectl_cmd="${1:-kubectl}"
     local namespace="${2:-default}"
 
     echo "Verifying GitLab installation..."
 
-    # Wait for migrations job to complete
-    echo "Waiting for GitLab migrations to complete..."
-    $kubectl_cmd wait --for=condition=complete job/gitlab-migrations-1 \
-        --namespace="$namespace" \
-        --timeout=15m || {
-            echo "❌ GitLab migrations failed or timed out"
-            $kubectl_cmd logs -l job-name=gitlab-migrations-1 --namespace="$namespace" --tail=50
-            return 1
-        }
-    echo "✅ Migrations completed"
+    # Wait for resources in dependency order
+    wait_for_gitlab_resources "$kubectl_cmd" "$namespace"
 
-    # Wait for core GitLab components
-    echo "Waiting for GitLab core components..."
-    local components=(
-        "deployment/gitlab-webservice-default"
-        "deployment/gitlab-sidekiq-all-in-1-v2"
-        "statefulset/gitlab-gitaly"
-        "deployment/gitlab-gitlab-shell"
-        "deployment/gitlab-toolbox"
-    )
-
-    for component in "${components[@]}"; do
-        echo "  Waiting for $component..."
-        $kubectl_cmd rollout status "$component" --namespace="$namespace" --timeout=10m || {
-            echo "❌ $component failed to become ready"
-            return 1
-        }
-    done
-    echo "✅ Core components ready"
+    # Check service endpoints
+    wait_for_gitlab_endpoints "$kubectl_cmd" "$namespace"
 
     # Display final status
-    echo "GitLab Pods:"
-    $kubectl_cmd get pods --namespace="$namespace" | grep gitlab
+    display_gitlab_status "$kubectl_cmd" "$namespace"
 
     echo "✅ GitLab installation verified!"
 }
 
+# Verifies cert-manager installation (deployments + endpoints)
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "cert-manager")
+# Returns:
+#   0 on success
+# Example:
+#   verify_cert_manager_installation "kubectl" "cert-manager"
+#   verify_cert_manager_installation "$KUBECTL" "kotsadm"
+verify_cert_manager_installation() {
+    local kubectl_cmd="${1:-kubectl}"
+    local namespace="${2:-cert-manager}"
+
+    echo "Verifying cert-manager installation..."
+
+    # Wait for resources
+    wait_for_cert_manager_resources "$kubectl_cmd" "$namespace"
+
+    # Check service endpoints
+    wait_for_cert_manager_endpoints "$kubectl_cmd" "$namespace"
+
+    # Display final status
+    display_cert_manager_status "$kubectl_cmd" "$namespace"
+
+    echo "✅ cert-manager installation verified!"
+}
+
+# Verifies NGINX Ingress Controller installation (deployment + endpoints)
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "ingress-nginx")
+# Returns:
+#   0 on success
+# Example:
+#   verify_nginx_ingress_installation "kubectl" "ingress-nginx"
+#   verify_nginx_ingress_installation "$KUBECTL" "kotsadm"
+verify_nginx_ingress_installation() {
+    local kubectl_cmd="${1:-kubectl}"
+    local namespace="${2:-ingress-nginx}"
+
+    echo "Verifying NGINX Ingress Controller installation..."
+
+    # Wait for resources
+    wait_for_nginx_ingress_resources "$kubectl_cmd" "$namespace"
+
+    # Check service endpoints
+    wait_for_nginx_ingress_endpoints "$kubectl_cmd" "$namespace"
+
+    # Display final status
+    display_nginx_ingress_status "$kubectl_cmd" "$namespace"
+
+    echo "✅ NGINX Ingress Controller installation verified!"
+}
+
+#######################################
+# GitLab Resource Waiting (Low-Level)
+#######################################
+
+# Waits for all GitLab resources to be ready in dependency order
+# Note: Consider using verify_gitlab_installation() for complete verification
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "default")
+# Returns:
+#   0 on success
+# Example:
+#   wait_for_gitlab_resources "kubectl" "default"
+#   wait_for_gitlab_resources "$KUBECTL" "kotsadm"
+wait_for_gitlab_resources() {
+    local kubectl_cmd="${1:-kubectl}"
+    local namespace="${2:-default}"
+
+    echo "Waiting for GitLab resources in dependency order..."
+
+    # Stage 1: Migrations (must complete first)
+    echo "Stage 1: Waiting for GitLab migrations..."
+    echo "  Waiting for migrations job to complete..."
+    $kubectl_cmd wait --for=condition=complete job/gitlab-migrations-1 \
+        --namespace="$namespace" \
+        --timeout=900s
+
+    # Stage 2: StatefulSets (dependencies)
+    echo "Stage 2: Waiting for StatefulSets..."
+    echo "  Waiting for PostgreSQL StatefulSet to have ready replicas..."
+    $kubectl_cmd wait statefulset/gitlab-postgresql \
+        --for=jsonpath='{.status.readyReplicas}'=1 \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "  Waiting for Redis StatefulSet to have ready replicas..."
+    $kubectl_cmd wait statefulset/gitlab-redis-master \
+        --for=jsonpath='{.status.readyReplicas}'=1 \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "  Waiting for Gitaly StatefulSet to have ready replicas..."
+    $kubectl_cmd wait statefulset/gitlab-gitaly \
+        --for=jsonpath='{.status.readyReplicas}'=1 \
+        -n "$namespace" \
+        --timeout=300s
+
+    # Stage 3: Core Deployments (depend on StatefulSets)
+    echo "Stage 3: Waiting for GitLab Core Deployments..."
+    echo "  Waiting for GitLab Webservice deployment to be available..."
+    $kubectl_cmd wait deployment/gitlab-webservice-default \
+        --for=condition=available \
+        -n "$namespace" \
+        --timeout=600s
+
+    echo "  Waiting for GitLab Sidekiq deployment to be available..."
+    $kubectl_cmd wait deployment/gitlab-sidekiq-all-in-1-v2 \
+        --for=condition=available \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "  Waiting for GitLab Shell deployment to be available..."
+    $kubectl_cmd wait deployment/gitlab-gitlab-shell \
+        --for=condition=available \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "  Waiting for GitLab Toolbox deployment to be available..."
+    $kubectl_cmd wait deployment/gitlab-toolbox \
+        --for=condition=available \
+        -n "$namespace" \
+        --timeout=300s
+
+    # Stage 4: Replicated SDK
+    echo "Stage 4: Waiting for Replicated SDK..."
+    echo "  Waiting for Replicated SDK deployment to be available..."
+    $kubectl_cmd wait deployment/replicated \
+        --for=condition=available \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "✅ All GitLab resources ready!"
+}
+
+# Waits for GitLab service endpoints using EndpointSlice
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "default")
+#   $3: include Replicated SDK endpoints (default: "true")
+# Returns:
+#   0 on success
+# Example:
+#   wait_for_gitlab_endpoints "kubectl" "default"
+wait_for_gitlab_endpoints() {
+    local kubectl_cmd="${1:-kubectl}"
+    local namespace="${2:-default}"
+    local include_sdk="${3:-true}"
+
+    echo "Waiting for GitLab service endpoints..."
+
+    local services=(
+        "gitlab-postgresql"
+        "gitlab-redis-master"
+        "gitlab-gitaly"
+        "gitlab-webservice-default"
+        "gitlab-sidekiq-all-in-1-v2"
+        "gitlab-gitlab-shell"
+        "gitlab-toolbox"
+    )
+
+    for service in "${services[@]}"; do
+        echo "  Waiting for ${service} service to have endpoints..."
+        $kubectl_cmd wait --for=jsonpath='{.endpoints[0]}' \
+            endpointslice \
+            -l kubernetes.io/service-name="$service" \
+            -n "$namespace" \
+            --timeout=300s
+    done
+
+    if [[ "$include_sdk" == "true" ]]; then
+        echo "  Waiting for Replicated SDK service to have endpoints..."
+        $kubectl_cmd wait --for=jsonpath='{.endpoints[0]}' \
+            endpointslice \
+            -l kubernetes.io/service-name=replicated \
+            -n "$namespace" \
+            --timeout=300s
+    fi
+
+    echo "✅ All GitLab service endpoints ready!"
+}
+
+#######################################
+# Infrastructure Component Waiting (Low-Level)
+#######################################
+
+# Waits for cert-manager resources to be ready
+# Note: Consider using verify_cert_manager_installation() for complete verification
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "cert-manager")
+# Returns:
+#   0 on success
+# Example:
+#   wait_for_cert_manager_resources "kubectl" "cert-manager"
+#   wait_for_cert_manager_resources "$KUBECTL" "kotsadm"
+wait_for_cert_manager_resources() {
+    local kubectl_cmd="${1:-kubectl}"
+    local namespace="${2:-cert-manager}"
+
+    echo "Waiting for cert-manager components..."
+
+    echo "  Waiting for cert-manager to be available..."
+    $kubectl_cmd wait deployment/cert-manager \
+        --for=condition=available \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "  Waiting for cert-manager-webhook to be available..."
+    $kubectl_cmd wait deployment/cert-manager-webhook \
+        --for=condition=available \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "  Waiting for cert-manager-cainjector to be available..."
+    $kubectl_cmd wait deployment/cert-manager-cainjector \
+        --for=condition=available \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "✅ cert-manager ready!"
+}
+
+# Waits for cert-manager service endpoints using EndpointSlice
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "cert-manager")
+# Returns:
+#   0 on success
+# Example:
+#   wait_for_cert_manager_endpoints "kubectl" "cert-manager"
+wait_for_cert_manager_endpoints() {
+    local kubectl_cmd="${1:-kubectl}"
+    local namespace="${2:-cert-manager}"
+
+    echo "Waiting for cert-manager service endpoints..."
+
+    echo "  Waiting for cert-manager service to have endpoints..."
+    $kubectl_cmd wait --for=jsonpath='{.endpoints[0]}' \
+        endpointslice \
+        -l kubernetes.io/service-name=cert-manager \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "  Waiting for cert-manager-webhook service to have endpoints..."
+    $kubectl_cmd wait --for=jsonpath='{.endpoints[0]}' \
+        endpointslice \
+        -l kubernetes.io/service-name=cert-manager-webhook \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "✅ cert-manager service endpoints ready!"
+}
+
+# Waits for NGINX Ingress Controller resources to be ready
+# Note: Consider using verify_nginx_ingress_installation() for complete verification
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "ingress-nginx")
+# Returns:
+#   0 on success
+# Example:
+#   wait_for_nginx_ingress_resources "kubectl" "ingress-nginx"
+#   wait_for_nginx_ingress_resources "$KUBECTL" "kotsadm"
+wait_for_nginx_ingress_resources() {
+    local kubectl_cmd="${1:-kubectl}"
+    local namespace="${2:-ingress-nginx}"
+
+    echo "Waiting for NGINX Ingress Controller..."
+
+    echo "  Waiting for NGINX Ingress Controller to be available..."
+    $kubectl_cmd wait deployment/ingress-nginx-controller \
+        --for=condition=available \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "✅ NGINX Ingress Controller ready!"
+}
+
+# Waits for NGINX Ingress Controller service endpoints using EndpointSlice
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "ingress-nginx")
+# Returns:
+#   0 on success
+# Example:
+#   wait_for_nginx_ingress_endpoints "kubectl" "ingress-nginx"
+wait_for_nginx_ingress_endpoints() {
+    local kubectl_cmd="${1:-kubectl}"
+    local namespace="${2:-ingress-nginx}"
+
+    echo "Waiting for NGINX Ingress Controller service endpoints..."
+
+    echo "  Waiting for NGINX Ingress Controller service to have endpoints..."
+    $kubectl_cmd wait --for=jsonpath='{.endpoints[0]}' \
+        endpointslice \
+        -l kubernetes.io/service-name=ingress-nginx-controller-admission \
+        -n "$namespace" \
+        --timeout=300s
+
+    echo "✅ NGINX Ingress Controller service endpoints ready!"
+}
+
+#######################################
+# GitLab UI Testing
+#######################################
+
+# Tests GitLab UI accessibility with retry logic
+# Arguments:
+#   $1: URL to test
+#   $2: maximum number of retries (default: 10)
+#   $3: retry interval in seconds (default: 15)
+#   $4: curl flags (default: "-k -f -s")
+# Returns:
+#   0 if UI is accessible, 1 otherwise
+# Example:
+#   test_gitlab_ui "https://gitlab.example.com" 10 30 "-k -f -s"
+#   test_gitlab_ui "http://localhost:30001" 5 3 "-f -s"
 test_gitlab_ui() {
     local url="$1"
     local max_retries="${2:-10}"
@@ -113,46 +435,56 @@ test_gitlab_ui() {
     return 1
 }
 
-verify_cert_manager_installation() {
+#######################################
+# Status Display
+#######################################
+
+# Displays final status of GitLab resources
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "default")
+# Example:
+#   display_gitlab_status "kubectl" "default"
+display_gitlab_status() {
+    local kubectl_cmd="${1:-kubectl}"
+    local namespace="${2:-default}"
+
+    echo ""
+    echo "Final deployment status:"
+    $kubectl_cmd get deployment,statefulset,service,ingress -n "$namespace" | grep -E "gitlab|replicated" || true
+    echo ""
+}
+
+# Displays final status of cert-manager resources
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "cert-manager")
+# Example:
+#   display_cert_manager_status "kubectl" "cert-manager"
+display_cert_manager_status() {
     local kubectl_cmd="${1:-kubectl}"
     local namespace="${2:-cert-manager}"
 
-    echo "Verifying cert-manager installation..."
-
-    local deployments=(
-        "cert-manager"
-        "cert-manager-cainjector"
-        "cert-manager-webhook"
-    )
-
-    for deployment in "${deployments[@]}"; do
-        echo "  Waiting for deployment/$deployment..."
-        $kubectl_cmd rollout status "deployment/$deployment" \
-            --namespace="$namespace" --timeout=5m || {
-            echo "❌ $deployment failed"
-            return 1
-        }
-    done
-
-    echo "✅ cert-manager installation verified!"
+    echo ""
+    echo "cert-manager status:"
+    $kubectl_cmd get deployment,service -n "$namespace" -l app.kubernetes.io/name=cert-manager || true
+    echo ""
 }
 
-verify_nginx_ingress_installation() {
+# Displays final status of NGINX Ingress Controller resources
+# Arguments:
+#   $1: kubectl command (default: "kubectl")
+#   $2: namespace (default: "ingress-nginx")
+# Example:
+#   display_nginx_ingress_status "kubectl" "ingress-nginx"
+display_nginx_ingress_status() {
     local kubectl_cmd="${1:-kubectl}"
     local namespace="${2:-ingress-nginx}"
 
-    echo "Verifying NGINX Ingress installation..."
-
-    echo "  Waiting for NGINX Ingress Controller to be available..."
-    $kubectl_cmd wait deployment/ingress-nginx-controller \
-        --for=condition=available \
-        -n "$namespace" \
-        --timeout=300s || {
-        echo "❌ NGINX Ingress controller failed"
-        return 1
-    }
-
-    echo "✅ NGINX Ingress installation verified!"
+    echo ""
+    echo "NGINX Ingress Controller status:"
+    $kubectl_cmd get deployment,service -n "$namespace" -l app.kubernetes.io/name=ingress-nginx || true
+    echo ""
 }
 
 #######################################

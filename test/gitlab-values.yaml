@@ -1,0 +1,32 @@
+# GitLab Helm Installation Test Values - EKS LoadBalancer with cert-manager
+# Tests production-realistic pattern: ingress-nginx + LoadBalancer + cert-manager
+
+global:
+  # Placeholder - will be updated dynamically by test script with LoadBalancer hostname
+  hosts:
+    domain: gitlab.example.com
+    externalIP: gitlab.example.com
+
+  ingress:
+    enabled: true
+    class: nginx
+    configureCertmanager: false
+    tls:
+      enabled: true
+      secretName: gitlab-tls
+
+  # Minimal GitLab configuration for testing
+  edition: ce
+
+# Disable unnecessary components for faster testing
+gitlab-runner:
+  install: false
+
+registry:
+  enabled: false
+
+prometheus:
+  install: false
+
+grafana:
+  enabled: false

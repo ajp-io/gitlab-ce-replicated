@@ -1,15 +1,31 @@
-configValues:
-  gitlab_root_password:
-    value: testpassword123!
-  gitlab_hostname:
-    value: gitlab.local
-  letsencrypt_environment:
-    value: staging
-  container_registry_enabled:
-    value: "1"
-  gitlab_runner_enabled:
-    value: "0"
-  database_type:
-    value: embedded
-  embedded_postgres_password:
-    value: postgrespw123
+apiVersion: kots.io/v1beta1
+kind: ConfigValues
+metadata: {}
+spec:
+  values:
+    gitlab_root_password:
+      value: testpassword123!
+    gitlab_hostname:
+      value: gitlab.local
+    letsencrypt_environment:
+      default: staging
+    container_registry_enabled:
+      default: "1"
+    gitlab_runner_enabled:
+      default: "0"
+    gitlab_runner_replicas:
+      default: "1"
+    database_type:
+      default: embedded
+    embedded_postgres_password:
+      value: postgrespw123
+    external_postgres_host: {}
+    external_postgres_port:
+      default: "5432"
+    external_postgres_username:
+      default: postgres
+    external_postgres_password: {}
+    external_postgres_database:
+      default: gitlabhq_production
+    external_postgres_sslmode:
+      default: require
