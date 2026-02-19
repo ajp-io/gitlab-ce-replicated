@@ -1,0 +1,11 @@
+apiVersion: app.k8s.io/v1beta1
+kind: Application
+metadata:
+  name: gitlab-community-edition
+spec:
+  descriptor:
+    links:
+      - description: GitLab Web Interface
+        url: repl{{ eq Distribution "embedded-cluster" | ternary (print "https://" (ConfigOption "gitlab_hostname")) "http://localhost:30001" }}
+      - description: GitLab Documentation
+        url: https://docs.gitlab.com/

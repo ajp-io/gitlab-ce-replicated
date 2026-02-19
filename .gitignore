@@ -1,0 +1,13 @@
+**/.DS_Store
+.helmignore
+
+# Helm package artifacts
+manifests/*.tgz
+
+# Helm dependency charts and lock files
+# Note: GitLab has local subcharts that need to be committed, so we exclude this directory from gitignore
+# charts/*/charts/
+charts/ingress-nginx/charts/
+charts/cert-manager/charts/
+charts/*/requirements.lock
+charts/*/.helmignore

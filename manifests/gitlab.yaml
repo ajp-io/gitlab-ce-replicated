@@ -1,0 +1,213 @@
+apiVersion: kots.io/v1beta2
+kind: HelmChart
+metadata:
+  name: gitlab-community-edition
+spec:
+  # chart identifies a matching chart from a .tgz
+  chart:
+    name: gitlab
+    chartVersion: 9.8.4
+  weight: 0
+  helmUpgradeFlags:
+    - --wait
+    - --wait-for-jobs
+    - --timeout
+    - 10m
+  values:
+    imagePullSecrets:
+      - name: '{{repl ImagePullSecretName }}'
+    global:
+      edition: ce
+      hosts:
+        domain: gitlab.local  # Default, overridden per distribution
+      initialRootPassword:
+        password: repl{{ ConfigOption "gitlab_root_password" }}
+    # Disable optional components by default
+    prometheus:
+      install: false
+    gitlab-kas:
+      enabled: false
+    gitlab:
+      gitlab-pages:
+        enabled: false
+    # Optional features from config
+    registry:
+      enabled: repl{{ ConfigOptionEquals "container_registry_enabled" "1" }}
+    gitlab-runner:
+      install: repl{{ ConfigOptionEquals "gitlab_runner_enabled" "1" }}
+      replicas: repl{{ ConfigOption "gitlab_runner_replicas" }}
+    replicated:
+      imagePullSecrets:
+        - name: '{{repl ImagePullSecretName }}'
+  optionalValues:
+    # Embedded Cluster - Use Ingress with HTTPS
+    - when: 'repl{{ eq Distribution "embedded-cluster" }}'
+      values:
+        global:
+          hosts:
+            domain: repl{{ ConfigOption "gitlab_hostname" }}
+            https: true
+          ingress:
+            enabled: true
+            configureCertmanager: false  # Use custom ClusterIssuers instead of certmanager-issuer subchart
+            class: nginx
+            annotations:
+              cert-manager.io/cluster-issuer: repl{{ ConfigOptionEquals "letsencrypt_environment" "production" | ternary "letsencrypt-prod" "letsencrypt-staging" }}
+        # Enable bundled cert-manager
+        installCertmanager: true
+        certmanager:
+          installCRDs: true
+          global:
+            imagePullSecrets:
+              - name: '{{repl ImagePullSecretName }}'
+        # Enable bundled nginx-ingress with NodePort
+        nginx-ingress:
+          enabled: true
+          imagePullSecrets:
+            - name: '{{repl ImagePullSecretName }}'
+          controller:
+            service:
+              type: NodePort
+              nodePorts:
+                http: 80
+                https: 443
+    # KOTS - Use ClusterIP
+    - when: 'repl{{ ne Distribution "embedded-cluster" }}'
+      values:
+        global:
+          hosts:
+            domain: gitlab.local
+            https: false
+          ingress:
+            enabled: false
+        # Disable bundled charts for KOTS
+        installCertmanager: false
+        nginx-ingress:
+          enabled: false
+    # External PostgreSQL mode
+    - when: 'repl{{ ConfigOptionEquals "database_type" "external" }}'
+      values:
+        postgresql:
+          install: false
+        global:
+          psql:
+            host: repl{{ ConfigOption "external_postgres_host" }}
+            port: repl{{ ConfigOption "external_postgres_port" }}
+            database: repl{{ ConfigOption "external_postgres_database" }}
+            username: repl{{ ConfigOption "external_postgres_username" }}
+            password:
+              secret: gitlab-postgres-password
+              key: password
+    # Embedded PostgreSQL mode
+    - when: 'repl{{ ConfigOptionEquals "database_type" "embedded" }}'
+      values:
+        postgresql:
+          install: true
+          auth:
+            password: repl{{ ConfigOption "embedded_postgres_password" }}
+    # Redis - Always Embedded
+    - when: 'true'
+      values:
+        redis:
+          install: true
+        global:
+          redis:
+            password:
+              enabled: true
+              secret: gitlab-redis
+              key: redis-password
+    # MinIO Object Storage - Always Embedded
+    - when: 'true'
+      values:
+        minio:
+          install: true
+        global:
+          minio:
+            enabled: true
+    # Air gap - Use local registry
+    - when: 'repl{{ HasLocalRegistry }}'
+      recursiveMerge: true
+      values:
+        # GitLab CNG images
+        gitlab:
+          webservice:
+            image:
+              repository: '{{repl LocalRegistryHost }}/{{repl LocalRegistryNamespace }}/gitlab-webservice-ce'
+          sidekiq:
+            image:
+              repository: '{{repl LocalRegistryHost }}/{{repl LocalRegistryNamespace }}/gitlab-sidekiq-ce'
+          gitaly:
+            image:
+              repository: '{{repl LocalRegistryHost }}/{{repl LocalRegistryNamespace }}/gitaly'
+          gitlab-shell:
+            image:
+              repository: '{{repl LocalRegistryHost }}/{{repl LocalRegistryNamespace }}/gitlab-shell'
+          toolbox:
+            image:
+              repository: '{{repl LocalRegistryHost }}/{{repl LocalRegistryNamespace }}/gitlab-toolbox-ce'
+          migrations:
+            image:
+              repository: '{{repl LocalRegistryHost }}/{{repl LocalRegistryNamespace }}/gitlab-toolbox-ce'
+        # Registry (when enabled)
+        registry:
+          image:
+            repository: '{{repl LocalRegistryHost }}/{{repl LocalRegistryNamespace }}/gitlab-container-registry'
+        # GitLab Runner (when enabled)
+        gitlab-runner:
+          image:
+            registry: '{{repl LocalRegistryHost }}'
+            image: '{{repl LocalRegistryNamespace }}/gitlab-runner'
+        # Dependencies
+        postgresql:
+          image:
+            registry: '{{repl LocalRegistryHost }}'
+            repository: '{{repl LocalRegistryNamespace }}/postgresql'
+        redis:
+          master:
+            image:
+              registry: '{{repl LocalRegistryHost }}'
+              repository: '{{repl LocalRegistryNamespace }}/redis'
+        minio:
+          image:
+            registry: '{{repl LocalRegistryHost }}'
+            repository: '{{repl LocalRegistryNamespace }}/minio'
+        replicated:
+          image:
+            registry: '{{repl LocalRegistryHost }}'
+            repository: '{{repl LocalRegistryNamespace }}/replicated-sdk-image'
+        # Bundled cert-manager (when enabled)
+        certmanager:
+          image:
+            registry: '{{repl LocalRegistryHost }}'
+            repository: '{{repl LocalRegistryNamespace }}/cert-manager-controller'
+          webhook:
+            image:
+              registry: '{{repl LocalRegistryHost }}'
+              repository: '{{repl LocalRegistryNamespace }}/cert-manager-webhook'
+          cainjector:
+            image:
+              registry: '{{repl LocalRegistryHost }}'
+              repository: '{{repl LocalRegistryNamespace }}/cert-manager-cainjector'
+          acmesolver:
+            image:
+              registry: '{{repl LocalRegistryHost }}'
+              repository: '{{repl LocalRegistryNamespace }}/cert-manager-acmesolver'
+          startupapicheck:
+            image:
+              registry: '{{repl LocalRegistryHost }}'
+              repository: '{{repl LocalRegistryNamespace }}/cert-manager-startupapicheck'
+        # Bundled nginx-ingress (when enabled)
+        nginx-ingress:
+          controller:
+            image:
+              registry: '{{repl LocalRegistryHost }}'
+              image: '{{repl LocalRegistryNamespace }}/controller'
+            admissionWebhooks:
+              patch:
+                image:
+                  registry: '{{repl LocalRegistryHost }}'
+                  image: '{{repl LocalRegistryNamespace }}/kube-webhook-certgen'
+  builder:
+    global:
+      replicated:
+        dockerconfigjson: placeholder # don't fail air gap builds
