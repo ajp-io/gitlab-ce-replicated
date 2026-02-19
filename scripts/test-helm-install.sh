@@ -10,8 +10,6 @@ test_header "GitLab Helm Installation Test (EKS + LoadBalancer + cert-manager)"
 # Configuration
 CUSTOMER_NAME="GitHub CI"
 NAMESPACE="gitlab"
-INGRESS_NGINX_NAMESPACE="ingress-nginx"
-CERT_MANAGER_NAMESPACE="cert-manager"
 
 # Validate required environment variables
 validate_env_vars "TEST_VERSION" "REPLICATED_API_TOKEN" || exit 1
@@ -53,120 +51,18 @@ GITLAB_VERSION=$(yq eval '.version' charts/gitlab/Chart.yaml)
 
 echo "GitLab chart version: ${GITLAB_VERSION}"
 
-# Add upstream Helm repositories
-echo "Adding upstream Helm repositories..."
-helm repo add jetstack https://charts.jetstack.io
-helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-helm repo update
-
-# Install cert-manager from upstream
-echo "Installing cert-manager from upstream Jetstack repository..."
-helm install cert-manager jetstack/cert-manager \
-  --version v1.16.2 \
-  --namespace ${CERT_MANAGER_NAMESPACE} \
-  --create-namespace \
-  --values test/cert-manager-values.yaml \
-  --wait \
-  --timeout 5m
-
-echo "✅ cert-manager installed"
-
-# Verify cert-manager installation (deployments + endpoints)
-verify_cert_manager_installation "kubectl" "${CERT_MANAGER_NAMESPACE}"
-
-# Create self-signed ClusterIssuer
-echo "Creating self-signed ClusterIssuer..."
-kubectl apply -f - <<EOF
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: selfsigned-issuer
-spec:
-  selfSigned: {}
-EOF
-
-echo "✅ Self-signed ClusterIssuer created"
-
-# Install ingress-nginx from upstream
-echo "Installing ingress-nginx from upstream Kubernetes repository..."
-helm install ingress-nginx ingress-nginx/ingress-nginx \
-  --version 4.11.3 \
-  --namespace ${INGRESS_NGINX_NAMESPACE} \
-  --create-namespace \
-  --values test/ingress-nginx-values.yaml \
-  --wait \
-  --timeout 10m
-
-echo "✅ ingress-nginx installed"
-
-# Verify ingress-nginx installation (deployment + endpoints)
-verify_nginx_ingress_installation "kubectl" "${INGRESS_NGINX_NAMESPACE}"
-
-# Wait for LoadBalancer hostname
-echo "Waiting for LoadBalancer to be provisioned..."
-TIMEOUT=600
-ELAPSED=0
-INTERVAL=15
-
-while [ $ELAPSED -lt $TIMEOUT ]; do
-  LB_HOSTNAME=$(kubectl get service ingress-nginx-controller -n ${INGRESS_NGINX_NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-
-  if [[ -n "$LB_HOSTNAME" && "$LB_HOSTNAME" != "null" ]]; then
-    echo "✅ LoadBalancer provisioned with hostname: ${LB_HOSTNAME}"
-    EXTERNAL_URL="https://${LB_HOSTNAME}"
-    break
-  fi
-
-  echo "⏳ Waiting for LoadBalancer... (${ELAPSED}s/${TIMEOUT}s)"
-  sleep $INTERVAL
-  ELAPSED=$((ELAPSED + INTERVAL))
-done
-
-if [[ -z "$LB_HOSTNAME" || "$LB_HOSTNAME" == "null" ]]; then
-  echo "❌ LoadBalancer failed to provision after ${TIMEOUT}s"
-  kubectl describe service ingress-nginx-controller -n ${INGRESS_NGINX_NAMESPACE}
-  exit 1
-fi
-
-echo "External URL will be: ${EXTERNAL_URL}"
-
 # Create GitLab namespace
 echo "Creating ${NAMESPACE} namespace..."
 kubectl create namespace ${NAMESPACE}
 
-# Create Certificate resource for LoadBalancer hostname (self-signed)
-echo "Creating Certificate resource for ${LB_HOSTNAME} (self-signed via cert-manager)..."
-kubectl apply -f - <<EOF
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: gitlab-tls
-  namespace: ${NAMESPACE}
-spec:
-  secretName: gitlab-tls
-  issuerRef:
-    name: selfsigned-issuer
-    kind: ClusterIssuer
-  dnsNames:
-    - ${LB_HOSTNAME}
-EOF
-
-echo "Waiting for cert-manager to issue certificate..."
-kubectl wait certificate/gitlab-tls --for=condition=Ready -n ${NAMESPACE} --timeout=300s
-
-echo "✅ Certificate issued and ready"
-
-# Prepare GitLab values with actual LoadBalancer hostname
-echo "Preparing GitLab values with LoadBalancer hostname..."
-cp test/gitlab-values.yaml /tmp/gitlab-values.yaml
-yq eval -i ".global.hosts.domain = \"${LB_HOSTNAME}\"" /tmp/gitlab-values.yaml
-yq eval -i ".global.hosts.externalIP = \"${LB_HOSTNAME}\"" /tmp/gitlab-values.yaml
-
-echo "✅ GitLab values prepared with dynamic hostname"
-
-# Install GitLab from Replicated registry
+# Install GitLab from Replicated registry (includes bundled cert-manager and nginx-ingress)
 echo "Installing GitLab from Replicated registry..."
+echo "This includes bundled cert-manager and nginx-ingress charts"
 echo "This may take 15-20 minutes due to migrations and initialization..."
+
+# Prepare GitLab values (hostname will be updated after LoadBalancer is ready)
+cp test/gitlab-values.yaml /tmp/gitlab-values.yaml
+
 helm install gitlab \
   oci://charts.alexparker.info/gitlab-community-edition/${CHANNEL}/gitlab \
   --version ${GITLAB_VERSION} \
@@ -178,6 +74,88 @@ helm install gitlab \
   --timeout 20m
 
 echo "✅ GitLab installation complete"
+
+# Wait for LoadBalancer to be provisioned (nginx-ingress is now bundled in gitlab namespace)
+echo "Waiting for LoadBalancer to be provisioned..."
+echo "This may take a few minutes for AWS NLB to provision..."
+kubectl wait --for=jsonpath='{.status.loadBalancer.ingress[0]}' \
+  service/gitlab-nginx-ingress-controller \
+  -n ${NAMESPACE} \
+  --timeout=600s
+
+# Get LoadBalancer hostname
+echo "Getting LoadBalancer hostname..."
+LOADBALANCER_HOSTNAME=$(kubectl get service gitlab-nginx-ingress-controller \
+  -n ${NAMESPACE} \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+if [[ -z "$LOADBALANCER_HOSTNAME" || "$LOADBALANCER_HOSTNAME" == "null" ]]; then
+    echo "❌ Failed to get LoadBalancer hostname"
+    kubectl describe service gitlab-nginx-ingress-controller -n ${NAMESPACE}
+    exit 1
+fi
+
+echo "✅ LoadBalancer hostname: ${LOADBALANCER_HOSTNAME}"
+
+# Update GitLab hostname in values
+EXTERNAL_URL="https://${LOADBALANCER_HOSTNAME}"
+echo "GitLab will be accessible at: ${EXTERNAL_URL}"
+
+# Update GitLab values with the LoadBalancer hostname
+yq eval ".global.hosts.domain = \"${LOADBALANCER_HOSTNAME}\"" -i /tmp/gitlab-values.yaml
+yq eval ".global.hosts.externalIP = \"${LOADBALANCER_HOSTNAME}\"" -i /tmp/gitlab-values.yaml
+
+# Upgrade GitLab with the updated hostname
+echo "Upgrading GitLab with LoadBalancer hostname..."
+helm upgrade gitlab \
+  oci://charts.alexparker.info/gitlab-community-edition/${CHANNEL}/gitlab \
+  --version ${GITLAB_VERSION} \
+  --namespace ${NAMESPACE} \
+  --values /tmp/gitlab-values.yaml \
+  --username "${CUSTOMER_EMAIL}" \
+  --password "${LICENSE_ID}" \
+  --reuse-values \
+  --wait \
+  --timeout 10m
+
+echo "✅ GitLab upgraded with LoadBalancer hostname"
+
+# Create self-signed ClusterIssuer for testing (since configureCertmanager=false)
+echo "Creating self-signed ClusterIssuer for testing..."
+cat <<EOF | kubectl apply -f -
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+spec:
+  selfSigned: {}
+EOF
+
+# Create Certificate for GitLab with LoadBalancer hostname
+echo "Creating Certificate for GitLab..."
+cat <<EOF | kubectl apply -f -
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gitlab-tls
+  namespace: ${NAMESPACE}
+spec:
+  secretName: gitlab-tls
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+  dnsNames:
+    - ${LOADBALANCER_HOSTNAME}
+EOF
+
+# Wait for certificate to be ready
+echo "Waiting for certificate to be ready..."
+kubectl wait --for=condition=Ready \
+  certificate/gitlab-tls \
+  -n ${NAMESPACE} \
+  --timeout=300s
+
+echo "✅ Certificate ready"
 
 # Verify pod status
 echo "Verifying pod status..."
@@ -205,10 +183,10 @@ if ! test_gitlab_ui "${EXTERNAL_URL}" 10 15 "-k -f -s"; then
     kubectl describe ingress -n ${NAMESPACE}
     echo ""
     echo "LoadBalancer service:"
-    kubectl describe service ingress-nginx-controller -n ${INGRESS_NGINX_NAMESPACE}
+    kubectl describe service gitlab-nginx-ingress-controller -n ${NAMESPACE}
     echo ""
     echo "Nginx controller logs:"
-    kubectl logs -n ${INGRESS_NGINX_NAMESPACE} -l app.kubernetes.io/name=ingress-nginx --tail=50
+    kubectl logs -n ${NAMESPACE} -l app.kubernetes.io/name=ingress-nginx --tail=50
     echo ""
     echo "Certificate status:"
     kubectl describe certificate gitlab-tls -n ${NAMESPACE}
@@ -219,7 +197,8 @@ echo ""
 echo "Final deployment status:"
 kubectl get deployment,statefulset,service,ingress -n ${NAMESPACE}
 echo ""
-kubectl get service -n ${INGRESS_NGINX_NAMESPACE}
+echo "LoadBalancer service status:"
+kubectl get service gitlab-nginx-ingress-controller -n ${NAMESPACE}
 
 echo ""
 test_footer "GitLab Helm Installation Test"
