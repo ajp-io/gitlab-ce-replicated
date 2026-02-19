@@ -1,54 +1,91 @@
 #!/bin/bash
-# Test GitLab installation via KOTS on existing cluster
-
 set -euo pipefail
 
+# Load test helper library
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib/test-helpers.sh"
+source "${SCRIPT_DIR}/lib/test-helpers.sh"
 
-TEST_NAME="GitLab KOTS Installation"
-NAMESPACE="default"
+test_header "GitLab KOTS Installation Test"
 
-test_header "$TEST_NAME"
+# Configuration
+CUSTOMER_NAME="GitHub CI"
+NAMESPACE="gitlab"
+APP_NAME="gitlab-community-edition"
+SHARED_PASSWORD="TestAdminPassword123!"
 
-# Validate environment
+# Validate required environment variables
 validate_env_vars "TEST_VERSION" "REPLICATED_API_TOKEN" || exit 1
 
-echo "Test version: $TEST_VERSION"
-echo "Namespace: $NAMESPACE"
+echo "Installing KOTS for version: ${TEST_VERSION}"
 
-# Create Kind cluster
-echo "Creating Kind cluster..."
-kind create cluster --name gitlab-kots-test --wait 5m || {
-    echo "❌ Failed to create Kind cluster"
-    exit 1
-}
-
-# Install KOTS
-echo "Installing KOTS..."
+# Install KOTS CLI
+echo "Installing KOTS CLI..."
 curl https://kots.io/install | bash
-kubectl kots install gitlab-community-edition \
-    --namespace "$NAMESPACE" \
-    --shared-password "test123" \
-    --license-file "$REPLICATED_LICENSE_FILE" \
-    --config-values "$SCRIPT_DIR/../test/config-values.yaml" \
-    --wait-duration 20m || {
-        echo "❌ KOTS installation failed"
-        exit 1
-    }
 
-# Verify GitLab installation
-verify_gitlab_installation "kubectl" "$NAMESPACE"
+# Verify KOTS installation
+echo "Verifying KOTS installation..."
+kubectl kots version
 
-# Port-forward and test UI
-echo "Setting up port-forward..."
-kubectl port-forward -n "$NAMESPACE" service/gitlab-webservice-default 30001:8080 &
-PF_PID=$!
+# Download license using Replicated CLI (more reliable than curl API)
+echo "Downloading license for customer: ${CUSTOMER_NAME}..."
+replicated customer download-license --customer "${CUSTOMER_NAME}" > /tmp/license.yaml
+
+echo "License downloaded successfully"
+
+# Verify config values file exists
+if [[ ! -f "/tmp/config-values.yaml" ]]; then
+    echo "❌ Config values file not found at /tmp/config-values.yaml"
+    exit 1
+fi
+
+echo "Config values file verified"
+
+# Note: KOTS will create the namespace automatically, so we don't need to create it manually
+
+# Support custom channel (default: unstable)
+CHANNEL="${CHANNEL:-unstable}"
+echo "Using channel: ${CHANNEL}"
+
+# Install application using KOTS
+echo "Installing ${APP_NAME} with KOTS from ${CHANNEL} channel..."
+echo "This may take several minutes..."
+
+kubectl kots install ${APP_NAME}/${CHANNEL} \
+  --shared-password "${SHARED_PASSWORD}" \
+  --license-file /tmp/license.yaml \
+  --config-values /tmp/config-values.yaml \
+  --namespace ${NAMESPACE} \
+  --no-port-forward \
+  --wait-duration 20m
+
+echo "KOTS installation complete! Verifying deployments..."
+
+# Verify complete GitLab installation (resources + endpoints + status)
+verify_gitlab_installation "kubectl" "${NAMESPACE}"
+
+echo "Testing GitLab UI accessibility through KOTS admin console..."
+# Start admin console in background
+kubectl kots admin-console --namespace ${NAMESPACE} &
+KOTS_PID=$!
+
+# Wait for port forward to establish
+echo "Waiting for admin console port forward to establish..."
 sleep 5
 
-test_gitlab_ui "http://localhost:30001" 20 5
+# Test UI accessibility using helper (retry with short intervals for robustness)
+if test_gitlab_ui "http://localhost:30001" 5 3 "-f -s"; then
+    echo "✅ GitLab UI is accessible through KOTS admin console"
+else
+    echo "❌ GitLab UI not accessible through KOTS admin console"
+    kill $KOTS_PID || true
+    exit 1
+fi
 
-# Cleanup
-kill $PF_PID || true
+# Cleanup admin console
+echo "Cleaning up admin console port forward..."
+kill $KOTS_PID || true
+sleep 2
 
-test_footer "$TEST_NAME"
+echo "Cluster verification complete!"
+
+test_footer "GitLab KOTS Installation Test"

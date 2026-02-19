@@ -254,16 +254,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: 'latest'
-
-      - name: Setup Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: 'latest'
-
       - name: Install Replicated CLI
         run: |
           curl -s https://api.github.com/repos/replicatedhq/replicated/releases/latest \
@@ -275,29 +265,74 @@ jobs:
           sudo mv replicated /usr/local/bin/
 
       - name: Create Kind cluster
-        uses: helm/kind-action@v1
-        with:
-          cluster_name: gitlab-kots-test
-          version: v1.34.0
-          wait: 5m
-
-      - name: Install KOTS CLI
+        id: cluster
         run: |
-          curl https://kots.io/install | bash
+          # Create Kind cluster for KOTS testing
+          COMMIT_SHORT=$(git rev-parse --short HEAD)
+          CLUSTER_NAME="kots-pr${{ github.event.pull_request.number }}-r${{ github.run_number }}-${COMMIT_SHORT}"
+          echo "Creating Kind cluster for KOTS testing: $CLUSTER_NAME (waiting up to 10 minutes)..."
 
-      - name: Make test script executable
+          CLUSTER_OUTPUT=$(replicated cluster create \
+            --distribution kind \
+            --version 1.34 \
+            --instance-type r1.small \
+            --name "$CLUSTER_NAME" \
+            --wait 10m \
+            --output json)
+
+          echo "Cluster creation output:"
+          echo "$CLUSTER_OUTPUT"
+
+          # Extract cluster ID from output
+          CLUSTER_ID=$(echo "$CLUSTER_OUTPUT" | jq -r '.id // empty')
+
+          if [[ -z "$CLUSTER_ID" || "$CLUSTER_ID" == "null" ]]; then
+            echo "❌ Failed to get cluster ID from output"
+            exit 1
+          fi
+
+          echo "cluster_id=$CLUSTER_ID" >> $GITHUB_OUTPUT
+          echo "✅ Kind cluster created and ready: $CLUSTER_ID"
+        env:
+          REPLICATED_API_TOKEN: ${{ secrets.REPLICATED_API_TOKEN }}
+
+      - name: Setup kubectl and run KOTS install
         run: |
+          # Set up kubectl using replicated cluster kubeconfig
+          echo "Setting up kubectl with cluster kubeconfig..."
+          echo "Cluster ID: ${{ steps.cluster.outputs.cluster_id }}"
+
+          # The replicated cluster kubeconfig command updates ~/.kube/config automatically
+          # and sets the current context, so we don't need to manage a separate kubeconfig file
+          replicated cluster kubeconfig ${{ steps.cluster.outputs.cluster_id }}
+
+          # Verify kubectl access (should now use the updated ~/.kube/config)
+          echo "Verifying kubectl access..."
+          kubectl get nodes
+          kubectl get namespaces
+
+          # Make script executable and transfer config
           chmod +x scripts/test-kots-install.sh
+          cp test/config-values.yaml /tmp/config-values.yaml
 
-      - name: Run KOTS installation test
-        run: |
-          export TEST_VERSION="${{ needs.create-release.outputs.test_version }}"
-          export REPLICATED_LICENSE_FILE="/tmp/license.yaml"
-          export REPLICATED_API_TOKEN="${{ secrets.REPLICATED_API_TOKEN }}"
-
-          # Create license file
-          echo "${{ secrets.GITLAB_LICENSE_YAML }}" > $REPLICATED_LICENSE_FILE
-
+          # Run KOTS installation test
+          echo "Running KOTS installation test for version: ${{ needs.create-release.outputs.test_version }}"
+          TEST_VERSION="${{ needs.create-release.outputs.test_version }}" \
+          CHANNEL="unstable" \
+          REPLICATED_API_TOKEN="${{ secrets.REPLICATED_API_TOKEN }}" \
           ./scripts/test-kots-install.sh
+
+          echo "KOTS test completed successfully!"
+        env:
+          REPLICATED_API_TOKEN: ${{ secrets.REPLICATED_API_TOKEN }}
+
+      - name: Cleanup Kind cluster
+        if: success()
+        run: |
+          if [[ -n "${{ steps.cluster.outputs.cluster_id }}" ]]; then
+            echo "✅ Test passed! Cleaning up Kind cluster: ${{ steps.cluster.outputs.cluster_id }}"
+            replicated cluster rm ${{ steps.cluster.outputs.cluster_id }} || true
+            echo "Cluster cleanup completed"
+          fi
         env:
           REPLICATED_API_TOKEN: ${{ secrets.REPLICATED_API_TOKEN }}
