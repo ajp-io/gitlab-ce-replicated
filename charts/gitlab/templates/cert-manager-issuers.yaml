@@ -1,4 +1,4 @@
-{{- if and (eq .Values.global.ingress.configureCertmanager true) .Values.global.replicated.customerEmail }}
+{{- if and (eq .Values.global.ingress.enabled true) .Values.global.replicated.customerEmail }}
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
