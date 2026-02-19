@@ -53,10 +53,26 @@ spec:
             class: nginx
             annotations:
               cert-manager.io/cluster-issuer: repl{{ ConfigOptionEquals "letsencrypt_environment" "production" | ternary "letsencrypt-prod" "letsencrypt-staging" }}
-        nginx-ingress:
-          enabled: false  # Use separate chart
+          replicated:
+            customerEmail: repl{{ LicenseFieldValue "customer_email" }}
+        # Enable bundled cert-manager
+        installCertmanager: true
         certmanager:
-          install: false  # Use separate chart
+          installCRDs: true
+          global:
+            imagePullSecrets:
+              - name: '{{repl ImagePullSecretName }}'
+        # Enable bundled nginx-ingress with NodePort
+        nginx-ingress:
+          enabled: true
+          imagePullSecrets:
+            - name: '{{repl ImagePullSecretName }}'
+          controller:
+            service:
+              type: NodePort
+              nodePorts:
+                http: 80
+                https: 443
     # KOTS - Use ClusterIP
     - when: 'repl{{ ne Distribution "embedded-cluster" }}'
       values:
@@ -66,10 +82,10 @@ spec:
             https: false
           ingress:
             enabled: false
+        # Disable bundled charts for KOTS
+        installCertmanager: false
         nginx-ingress:
           enabled: false
-        certmanager:
-          install: false
     # External PostgreSQL mode
     - when: 'repl{{ ConfigOptionEquals "database_type" "external" }}'
       values:
@@ -161,6 +177,38 @@ spec:
           image:
             registry: '{{repl LocalRegistryHost }}'
             repository: '{{repl LocalRegistryNamespace }}/replicated-sdk-image'
+        # Bundled cert-manager (when enabled)
+        certmanager:
+          image:
+            registry: '{{repl LocalRegistryHost }}'
+            repository: '{{repl LocalRegistryNamespace }}/cert-manager-controller'
+          webhook:
+            image:
+              registry: '{{repl LocalRegistryHost }}'
+              repository: '{{repl LocalRegistryNamespace }}/cert-manager-webhook'
+          cainjector:
+            image:
+              registry: '{{repl LocalRegistryHost }}'
+              repository: '{{repl LocalRegistryNamespace }}/cert-manager-cainjector'
+          acmesolver:
+            image:
+              registry: '{{repl LocalRegistryHost }}'
+              repository: '{{repl LocalRegistryNamespace }}/cert-manager-acmesolver'
+          startupapicheck:
+            image:
+              registry: '{{repl LocalRegistryHost }}'
+              repository: '{{repl LocalRegistryNamespace }}/cert-manager-startupapicheck'
+        # Bundled nginx-ingress (when enabled)
+        nginx-ingress:
+          controller:
+            image:
+              registry: '{{repl LocalRegistryHost }}'
+              image: '{{repl LocalRegistryNamespace }}/controller'
+            admissionWebhooks:
+              patch:
+                image:
+                  registry: '{{repl LocalRegistryHost }}'
+                  image: '{{repl LocalRegistryNamespace }}/kube-webhook-certgen'
   builder:
     global:
       replicated:

@@ -1,4 +1,4 @@
-{{- if eq .Values.global.ingress.configureCertmanager true }}
+{{- if and (eq .Values.global.ingress.configureCertmanager true) .Values.global.replicated.customerEmail }}
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -7,13 +7,13 @@ metadata:
 spec:
   acme:
     server: https://acme-staging-v02.api.letsencrypt.org/directory
-    email: admin@{{ .Values.global.hosts.domain }}
+    email: {{ .Values.global.replicated.customerEmail }}
     privateKeySecretRef:
       name: letsencrypt-staging
     solvers:
     - http01:
         ingress:
-          class: nginx
+          class: {{ .Values.global.ingress.class | default "nginx" }}
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -22,11 +22,11 @@ metadata:
 spec:
   acme:
     server: https://acme-v02.api.letsencrypt.org/directory
-    email: admin@{{ .Values.global.hosts.domain }}
+    email: {{ .Values.global.replicated.customerEmail }}
     privateKeySecretRef:
       name: letsencrypt-prod
     solvers:
     - http01:
         ingress:
-          class: nginx
+          class: {{ .Values.global.ingress.class | default "nginx" }}
 {{- end }}

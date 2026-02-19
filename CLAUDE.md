@@ -12,10 +12,8 @@ When you ask me to "create a release" or "make a release", I should:
 2. **Package Helm charts**
    - Clean existing packages: `rm -f manifests/*.tgz 2>/dev/null || true`
    - Update GitLab dependencies: `helm dependency update charts/gitlab`
-   - Package charts:
+   - Package GitLab chart (includes bundled cert-manager and nginx-ingress):
      - `helm package charts/gitlab -d manifests -u`
-     - `helm package charts/ingress-nginx -d manifests -u`
-     - `helm package charts/cert-manager -d manifests -u`
 
 3. **Create and promote release**
    - `replicated release create --lint --yaml-dir ./manifests --promote Dev --version [NEW_VERSION]`

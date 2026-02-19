@@ -52,18 +52,12 @@ jobs:
           # Clean any existing packages
           rm -f manifests/*.tgz
 
-          # Update dependencies to fetch the Replicated SDK for GitLab chart
+          # Update dependencies to fetch the Replicated SDK and bundled charts for GitLab chart
           helm dependency update charts/gitlab
 
-          # Package all charts
+          # Package GitLab chart (includes bundled cert-manager and nginx-ingress)
           echo "Packaging GitLab chart..."
           helm package charts/gitlab -d manifests -u
-
-          echo "Packaging ingress-nginx chart..."
-          helm package charts/ingress-nginx -d manifests -u
-
-          echo "Packaging cert-manager chart..."
-          helm package charts/cert-manager -d manifests -u
 
           echo "Packaged charts:"
           ls -la manifests/*.tgz
